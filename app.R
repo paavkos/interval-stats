@@ -17,45 +17,63 @@ library(osrm)
 library(geosphere)
 library(zoo)
 library(changepoint)
+library(data.table)
 
 #-------------------------------------------------------------------------------
 
-source("functions_interval.R") # tähän oikea polku
+source("~/Desktop/GPX-Analyzer/functions_interval.R") # tähän oikea polku
 
 # käyttöliittymä
 ui <- fluidPage(
   fileInput("gpx_file", "GPX file"),
-  leafletOutput("map"),
-  tabsetPanel(
-    tabPanel("Map"),
-    tabPanel("Intervals"),
-    tabPanel("Analytics")
-  ),
-  tableOutput("interval_table"),
-  
-  selectInput(
-    "segment_type",
-    "Segment type",
-    choices = c("All", "Sprint", "Slow"),
-    selected = "All"
-  ),
-  
-  numericInput(
-    "min_distance",
-    "Min distance (m)",
-    value = 0,
-    min = 0
-  ),
-  
-  actionButton(
-    "apply_filter",
-    "Apply filter"
+  tabsetPanel(id = "main_tabs",
+              
+              tabPanel(
+                "Map",
+                leafletOutput("map", height = 700)
+              ),
+              
+              tabPanel(
+                "Intervals",
+                
+                selectInput(
+                  "segment_type",
+                  "Segment type",
+                  choices = c("All", "Sprint", "Slow"),
+                  selected = "All"
+                ),
+                
+                numericInput(
+                  "min_distance",
+                  "Min distance (m)",
+                  value = 0,
+                  min = 0
+                ),
+                
+                actionButton(
+                  "apply_filter",
+                  "Apply filter"
+                ),
+                
+                tableOutput("interval_table"),
+                tableOutput("stats_summary")
+              ),
+              
+              tabPanel(
+                "Analytics",
+                verbatimTextOutput("stats_summary"),
+                plotOutput("hist_lengths"),
+                plotOutput("hist_duration"),
+                plotOutput("scatter")
+                # DT::DTOutput("sprint_table"),
+                # plotOutput("test")
+              )
   )
 )
 
 
 # RAKENNE_ESIMERKKI
-server <- function(input, output, session) {
+server <- function(input, output, session){
   
   # Data inputti sisään, lue tiedosto
   gpx_raw <- reactive({
@@ -68,7 +86,7 @@ server <- function(input, output, session) {
     req(gpx_raw())
     clean_data(gpx_raw())
   })
-
+  
   # 3. DERIVATIIVIT (speed etc.)
   intervallit <- reactive({
     req(track())
@@ -106,11 +124,11 @@ server <- function(input, output, session) {
     req(full(),segmentit())
     left_join(full(), segmentit(), by = 'segment')
   })
-
+  
   # 5. Kartta visualisointiin
   output$map <- renderLeaflet({
     req(data())
-
+    
     leaflet(data()) %>%
       addProviderTiles("Esri.WorldImagery") %>% 
       addPolylines(
@@ -124,9 +142,51 @@ server <- function(input, output, session) {
         )
       )
   })
-
+  
   # 6. Taulukko 
   output$interval_table <- renderTable(filtered())
+  
+  # 7. Tilastoja lenkistä
+  output$stats_summary <- renderTable({
+    # filtteröi
+    df <- segmentit() %>%
+      dplyr::filter(class == "sprint", length >= 10)
+    #
+    df %>%
+      dplyr::summarise(
+        longest = max(length, na.rm = TRUE),
+        shortest = min(length, na.rm = TRUE),
+        fastest = min(interval_pace, na.rm = TRUE),
+        slowest = max(interval_pace, na.rm = TRUE)
+      )
+  })
+  
+  # 8. Kiinnostavia kuvioita
+  output$hist_lengths <- renderPlot({
+    df <- segmentit() %>% 
+      filter(class == "sprint", length >= 10)
+    hist(df$length)
+  })
+  
+  # histogrammi kestoista
+  output$hist_duration <- renderPlot({
+    df <- segmentit() %>% 
+      filter(class == "sprint", length >= 10)
+    hist(df$seconds)
+  })
+  
+  # yli 10m sprinteissä hajontakuvio: pituuden ja nopeuden korrelaatio?
+  output$scatter <- renderPlot({
+    
+    df <- segmentit() %>%
+      dplyr::filter(class == "sprint", length >= 10)
+    
+    ggplot(df, aes(x = length, y = interval_pace)) +
+      geom_point()
+  })
 }
 
+
+
 shinyApp(ui, server)
+
